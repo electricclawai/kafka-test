@@ -27,7 +27,7 @@ jobs:
       - name: Set up Docker Compose
         run: |
           # Docker Compose is pre-installed on GitHub-hosted runners
-          docker-compose --version
+          docker compose version
 
       - name: Start Kafka (Wurstmeister)
         run: |
@@ -53,7 +53,7 @@ jobs:
               depends_on:
                 - zookeeper
           EOF
-          docker-compose up -d
+          docker compose up -d
 
       - name: Wait for Kafka to be Ready
         run: |
@@ -94,4 +94,4 @@ jobs:
 
       - name: Cleanup Kafka and Zookeeper Containers
         if: always()
-        run: docker-compose down
+        run: docker compose down
