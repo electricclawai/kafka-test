@@ -37,6 +37,9 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v3
       
+      - name: Ensure Gradle Wrapper is Executable
+        run: chmod +x ./gradlew
+      
       - name: Wait for Kafka to be Ready
         run: |
           timeout=300 # 5 minutes
