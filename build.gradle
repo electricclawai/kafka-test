@@ -77,6 +77,11 @@ task functionalTest(type: Test) {
     shouldRunAfter test
 }
 
+// Configure process resources tasks to handle duplicates
+tasks.withType(ProcessResources) {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+}
+
 test {
     useJUnitPlatform()
     testLogging {
