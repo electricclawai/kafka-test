@@ -1,0 +1,97 @@
+name: "kafka-ct"
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - sc971
+
+jobs:
+  kafka-functional-test:
+    runs-on: ubuntu-latest
+    env:
+      artifact_name: "kafka-automation"
+      version-major: "1"
+      version-minor: "0"
+      version-patch: "0"
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v3
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: Set up Docker Compose
+        run: |
+          # Docker Compose is pre-installed on GitHub-hosted runners
+          docker-compose --version
+
+      - name: Start Kafka (Wurstmeister)
+        run: |
+          cat <<EOF > docker-compose.yml
+          version: '3.8'
+          services:
+            zookeeper:
+              image: wurstmeister/zookeeper:latest
+              container_name: zookeeper
+              ports:
+                - "2181:2181"
+
+            kafka:
+              image: wurstmeister/kafka:latest
+              container_name: kafka
+              ports:
+                - "9092:9092"
+              environment:
+                KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+                KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT://kafka:9092 # Fixed typo
+                KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+                KAFKA_BROKER_ID: 1
+              depends_on:
+                - zookeeper
+          EOF
+          docker-compose up -d
+
+      - name: Wait for Kafka to be Ready
+        run: |
+          timeout=300 # 5 minutes
+          start_time=$(date +%s)
+          while true; do
+            if docker exec kafka kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1; then
+              echo "Kafka is ready!";
+              break;
+            fi
+            current_time=$(date +%s)
+            elapsed=$((current_time - start_time))
+            if [ $elapsed -ge $timeout ]; then
+              echo "Timeout reached. Kafka is not ready.";
+              docker logs kafka
+              exit 1;
+            fi
+            echo "Waiting for Kafka to be ready...";
+            sleep 10;
+          done
+
+      - name: Capture Kafka Logs (if failure)
+        if: failure()
+        run: |
+          echo "Fetching Kafka logs..."
+          docker logs kafka || echo "Kafka container not found."
+
+      - name: Ensure Gradle Wrapper is Executable
+        run: chmod +x ./gradlew
+
+      - name: Build Kafka Project
+        run: ./gradlew build
+
+      - name: Run Kafka Functional Tests
+        run: ./gradlew functionalTest --info --stacktrace
+        env:
+          KAFKA_BROKER: kafka:9092 # Ensure this matches the advertised listener in Kafka
+
+      - name: Cleanup Kafka and Zookeeper Containers
+        if: always()
+        run: docker-compose down
