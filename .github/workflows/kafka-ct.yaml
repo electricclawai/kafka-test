@@ -1,68 +1,25 @@
-name: "kafka-ct"
+name: kafka-test
 
-on:
-  workflow_dispatch: {}
-  push:
-    branches:
-      - main
+on: [push, workflow_dispatch]
 
 jobs:
-  kafka-functional-test:
+  test:
     runs-on: ubuntu-latest
-    container:
-      image: gradle:8.5-jdk17
-      options: --user root
+    container: gradle:8.5-jdk17
     services:
       zookeeper:
         image: wurstmeister/zookeeper:latest
-        ports:
-          - 2181:2181
+        ports: [2181:2181]
       kafka:
         image: wurstmeister/kafka:latest
-        ports:
-          - 9092:9092
+        ports: [9092:9092]
         env:
           KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
           KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
           KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
-          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-          KAFKA_BROKER_ID: 1
-    env:
-      artifact_name: "kafka-automation"
-      version-major: "1"
-      version-minor: "0"
-      version-patch: "0"
     steps:
-      - name: Check out repo
-        uses: actions/checkout@v3
-      
-      - name: Ensure Gradle Wrapper is Executable
-        run: chmod +x ./gradlew
-      
-      - name: Wait for Kafka to be Ready
-        run: |
-          timeout=300 # 5 minutes
-          start_time=$(date +%s)
-          while true; do
-            if timeout 5 bash -c 'echo > /dev/tcp/kafka/9092' 2>/dev/null; then
-              echo "Kafka is ready!";
-              break;
-            fi
-            current_time=$(date +%s)
-            elapsed=$((current_time - start_time))
-            if [ $elapsed -ge $timeout ]; then
-              echo "Timeout reached. Kafka is not ready.";
-              exit 1;
-            fi
-            echo "Waiting for Kafka to be ready...";
-            sleep 10;
-          done
-
-      - name: Build Kafka Project
-        run: ./gradlew build
-
-      - name: Run Kafka Functional Tests
-        run: ./gradlew functionalTest --info --stacktrace
+      - uses: actions/checkout@v3
+      - run: chmod +x ./gradlew
+      - run: ./gradlew test
         env:
           KAFKA_BROKER: kafka:9092

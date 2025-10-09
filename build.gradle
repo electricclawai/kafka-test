@@ -1,15 +1,5 @@
 plugins {
     id 'java'
-    id 'application'
-}
-
-group = 'com.example'
-version = '1.0.0'
-
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
-    }
 }
 
 repositories {
@@ -17,79 +7,11 @@ repositories {
 }
 
 dependencies {
-    // Kafka client
-    implementation 'org.apache.kafka:kafka-clients:3.6.0'
-    
-    // Logging
-    implementation 'org.slf4j:slf4j-api:2.0.9'
-    implementation 'ch.qos.logback:logback-classic:1.4.11'
-    
-    // JSON processing
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.3'
-    
-    // Testing
+    testImplementation 'org.apache.kafka:kafka-clients:3.6.0'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
-    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
-    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
-    testImplementation 'org.assertj:assertj-core:3.24.2'
-    testImplementation 'org.awaitility:awaitility:4.2.0'
-}
-
-// Configure functional test source set
-sourceSets {
-    functionalTest {
-        java {
-            srcDir 'src/functionalTest/java'
-        }
-        resources {
-            srcDir 'src/functionalTest/resources'
-        }
-        compileClasspath += sourceSets.main.output + configurations.testRuntimeClasspath
-        runtimeClasspath += output + compileClasspath
-    }
-}
-
-// Create functional test task
-task functionalTest(type: Test) {
-    description = 'Runs functional tests against Kafka'
-    group = 'verification'
-    
-    testClassesDirs = sourceSets.functionalTest.output.classesDirs
-    classpath = sourceSets.functionalTest.runtimeClasspath
-    
-    // Use JUnit Platform
-    useJUnitPlatform()
-    
-    // Set system properties for Kafka connection
-    systemProperty 'kafka.broker', System.getenv('KAFKA_BROKER') ?: 'localhost:9092'
-    
-    // Test logging
-    testLogging {
-        events "passed", "skipped", "failed"
-        exceptionFormat "full"
-        showStandardStreams = true
-    }
-    
-    // Fail fast
-    failFast = false
-    
-    // Ensure build happens first
-    shouldRunAfter test
-}
-
-// Configure process resources tasks to handle duplicates
-tasks.withType(ProcessResources) {
-    duplicatesStrategy = DuplicatesStrategy.INCLUDE
 }
 
 test {
     useJUnitPlatform()
-    testLogging {
-        events "passed", "skipped", "failed"
-        exceptionFormat "full"
-    }
-}
-
-application {
-    mainClass = 'com.example.kafka.KafkaApplication'
+    systemProperty 'KAFKA_BROKER', System.getenv('KAFKA_BROKER') ?: 'localhost:9092'
 }
