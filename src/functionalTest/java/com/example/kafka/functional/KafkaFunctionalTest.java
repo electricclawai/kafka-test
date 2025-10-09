@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -152,11 +153,11 @@ public class KafkaFunctionalTest {
     void testMessageOrdering() throws Exception {
         logger.info("Testing message ordering");
         
-        String key = "ordered-key";
+        String key = "ordered-key-unique-" + UUID.randomUUID();
         
-        // Send messages with same key (should go to same partition)
+        // Send messages with same unique key (should go to same partition)
         for (int i = 0; i < 5; i++) {
-            producer.send(TEST_TOPIC, key, "message-" + i).get(10, TimeUnit.SECONDS);
+            producer.send(TEST_TOPIC, key, "ordered-message-" + i).get(10, TimeUnit.SECONDS);
         }
         
         // Consume and verify order
@@ -167,26 +168,31 @@ public class KafkaFunctionalTest {
                 List<ConsumerRecord<String, String>> records = consumer.poll(Duration.ofSeconds(2));
                 
                 // Collect all records
-                int totalReceived = records.size();
-                while (totalReceived < 5) {
+                int attempts = 0;
+                while (records.size() < 5 && attempts < 10) {
                     List<ConsumerRecord<String, String>> moreRecords = consumer.poll(Duration.ofSeconds(2));
                     records.addAll(moreRecords);
-                    totalReceived += moreRecords.size();
+                    attempts++;
                     
                     if (moreRecords.isEmpty()) {
-                        break;
+                        Thread.sleep(500);
                     }
                 }
                 
-                assertThat(records).hasSizeGreaterThanOrEqualTo(5);
+                // Filter only messages with our unique key
+                List<ConsumerRecord<String, String>> orderedRecords = records.stream()
+                    .filter(r -> key.equals(r.key()))
+                    .collect(Collectors.toList());
+                
+                assertThat(orderedRecords).hasSizeGreaterThanOrEqualTo(5);
                 
                 // Verify messages with same key are in order
                 for (int i = 0; i < 5; i++) {
-                    assertThat(records.get(i).key()).isEqualTo(key);
-                    assertThat(records.get(i).value()).isEqualTo("message-" + i);
+                    assertThat(orderedRecords.get(i).key()).isEqualTo(key);
+                    assertThat(orderedRecords.get(i).value()).isEqualTo("ordered-message-" + i);
                 }
                 
-                logger.info("Message ordering verified");
+                logger.info("Message ordering verified for {} messages", orderedRecords.size());
             });
     }
 
@@ -196,7 +202,7 @@ public class KafkaFunctionalTest {
     void testProducerWithNullKey() throws Exception {
         logger.info("Testing producer with null key");
         
-        String value = "value-without-key";
+        String value = "value-without-key-" + UUID.randomUUID();
         
         // Produce message without key
         producer.send(TEST_TOPIC, null, value).get(10, TimeUnit.SECONDS);
@@ -207,9 +213,33 @@ public class KafkaFunctionalTest {
             .pollInterval(Duration.ofSeconds(1))
             .untilAsserted(() -> {
                 List<ConsumerRecord<String, String>> records = consumer.poll(Duration.ofSeconds(2));
-                assertThat(records).isNotEmpty();
                 
-                ConsumerRecord<String, String> record = records.get(0);
+                // Keep polling to find our message
+                int attempts = 0;
+                while (attempts < 10) {
+                    // Check if we found our message
+                    boolean found = records.stream()
+                        .anyMatch(r -> r.key() == null && value.equals(r.value()));
+                    
+                    if (found) {
+                        break;
+                    }
+                    
+                    List<ConsumerRecord<String, String>> moreRecords = consumer.poll(Duration.ofSeconds(2));
+                    records.addAll(moreRecords);
+                    attempts++;
+                    
+                    if (moreRecords.isEmpty()) {
+                        Thread.sleep(500);
+                    }
+                }
+                
+                // Find our specific message with null key and unique value
+                ConsumerRecord<String, String> record = records.stream()
+                    .filter(r -> r.key() == null && value.equals(r.value()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("Message with null key not found"));
+                
                 assertThat(record.key()).isNull();
                 assertThat(record.value()).isEqualTo(value);
                 
