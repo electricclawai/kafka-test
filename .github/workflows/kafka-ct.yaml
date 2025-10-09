@@ -5,7 +5,7 @@ on: [push, workflow_dispatch]
 jobs:
   test:
     runs-on: ubuntu-latest
-    container: gradle:8.5-jdk17
+    container: gradle:6.9.2-jdk11
     services:
       zookeeper:
         image: wurstmeister/zookeeper:latest
