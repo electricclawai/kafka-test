@@ -5,21 +5,59 @@ on: [push, workflow_dispatch]
 jobs:
   test:
     runs-on: ubuntu-latest
-    container: gradle:6.9.2-jdk11
-    services:
-      zookeeper:
-        image: wurstmeister/zookeeper:latest
-        ports: [2181:2181]
-      kafka:
-        image: wurstmeister/kafka:latest
-        ports: [9092:9092]
-        env:
-          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+    container:
+      image: gradle:6.9.2-jdk11
+      options: --network host
     steps:
       - uses: actions/checkout@v3
-      - run: chmod +x ./gradlew
-      - run: ./gradlew test
+      
+      - name: Start Kafka with Docker Compose
+        run: |
+          cat <<EOF > docker-compose.yml
+          version: '3.8'
+          services:
+            zookeeper:
+              image: wurstmeister/zookeeper:latest
+              network_mode: host
+              environment:
+                ZOOKEEPER_CLIENT_PORT: 2181
+
+            kafka:
+              image: wurstmeister/kafka:latest
+              network_mode: host
+              environment:
+                KAFKA_ZOOKEEPER_CONNECT: localhost:2181
+                KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+                KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+                KAFKA_BROKER_ID: 1
+              depends_on:
+                - zookeeper
+          EOF
+          docker-compose up -d
+
+      - name: Wait for Kafka to be Ready
+        run: |
+          echo "Waiting for Kafka to be ready..."
+          for i in {1..30}; do
+            if docker exec $(docker ps -q -f ancestor=wurstmeister/kafka:latest) kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1; then
+              echo "Kafka is ready!";
+              exit 0;
+            fi
+            echo "Attempt $i: Kafka not ready yet...";
+            sleep 10;
+          done
+          echo "Kafka failed to start in time";
+          docker logs $(docker ps -q -f ancestor=wurstmeister/kafka:latest)
+          exit 1;
+
+      - name: Ensure Gradle Wrapper is Executable
+        run: chmod +x ./gradlew
+
+      - name: Run Kafka Tests
+        run: ./gradlew test --info
         env:
-          KAFKA_BROKER: kafka:9092
+          KAFKA_BROKER: localhost:9092
+
+      - name: Cleanup
+        if: always()
+        run: docker-compose down
