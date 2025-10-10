@@ -1,29 +1,28 @@
-name: kafka-test
+name: "kafka-ct"
 
-on: [push, workflow_dispatch]
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  test:
+  kafka-test:
     runs-on: ubuntu-latest
-    container:
-      image: gradle:6.9.2-jdk11
     steps:
-      - uses: actions/checkout@v3
+      - name: Check out repo
+        uses: actions/checkout@v3
       
-      - name: Install Docker CLI and Docker Compose
-        run: |
-          apt-get update
-          apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release
-          curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian bullseye stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-          apt-get update
-          apt-get install -y docker-ce-cli docker-compose-plugin
-          ln -s /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose || true
-      
-      - name: Create Docker Network
-        run: docker network create kafka-network || true
-      
-      - name: Start Kafka with Docker Compose
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Start Kafka (Wurstmeister)
         run: |
           cat <<EOF > docker-compose.yml
           version: '3.8'
@@ -31,58 +30,58 @@ jobs:
             zookeeper:
               image: wurstmeister/zookeeper:latest
               container_name: zookeeper
-              networks:
-                - kafka-network
               ports:
                 - "2181:2181"
 
             kafka:
               image: wurstmeister/kafka:latest
               container_name: kafka
-              networks:
-                - kafka-network
               ports:
                 - "9092:9092"
               environment:
                 KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-                KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+                KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
                 KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
                 KAFKA_BROKER_ID: 1
               depends_on:
                 - zookeeper
-          
-          networks:
-            kafka-network:
-              external: true
           EOF
           docker-compose up -d
-      
-      - name: Connect Container to Kafka Network
-        run: docker network connect kafka-network \$(hostname)
 
       - name: Wait for Kafka to be Ready
         run: |
-          echo "Waiting for Kafka to be ready..."
-          for i in {1..30}; do
-            if docker exec kafka kafka-topics.sh --bootstrap-server kafka:9092 --list > /dev/null 2>&1; then
+          timeout=300 # 5 minutes
+          start_time=$(date +%s)
+          while true; do
+            if docker exec kafka kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1; then
               echo "Kafka is ready!";
-              exit 0;
+              break;
             fi
-            echo "Attempt $i: Kafka not ready yet...";
+            current_time=$(date +%s)
+            elapsed=$((current_time - start_time))
+            if [ $elapsed -ge $timeout ]; then
+              echo "Timeout reached. Kafka is not ready.";
+              docker logs kafka
+              exit 1;
+            fi
+            echo "Waiting for Kafka to be ready...";
             sleep 10;
           done
-          echo "Kafka failed to start in time";
-          docker logs kafka
-          exit 1;
+
+      - name: Capture Kafka Logs (if failure)
+        if: failure()
+        run: |
+          echo "Fetching Kafka logs..."
+          docker logs kafka || echo "Kafka container not found."
 
       - name: Ensure Gradle Wrapper is Executable
         run: chmod +x ./gradlew
 
-      - name: Run Kafka Tests
-        run: ./gradlew test --info
+      - name: Build and Run Kafka Tests
+        run: ./gradlew test --info --stacktrace
         env:
-          KAFKA_BROKER: kafka:9092
+          KAFKA_BROKER: localhost:9092
 
-      - name: Cleanup
+      - name: Cleanup Kafka and Zookeeper Containers
         if: always()
         run: docker-compose down
