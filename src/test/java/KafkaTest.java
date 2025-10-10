@@ -23,7 +23,7 @@ public class KafkaTest {
         Properties props = new Properties();
         props.put("bootstrap.servers", BROKER);
         try (AdminClient admin = AdminClient.create(props)) {
-            admin.createTopics(List.of(new NewTopic(TOPIC, 1, (short) 1))).all().get();
+            admin.createTopics(Collections.singletonList(new NewTopic(TOPIC, 1, (short) 1))).all().get();
             System.out.println("✓ Topic created successfully");
         }
     }
@@ -46,7 +46,7 @@ public class KafkaTest {
         cProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         cProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         consumer = new KafkaConsumer<>(cProps);
-        consumer.subscribe(List.of(TOPIC));
+        consumer.subscribe(Collections.singletonList(TOPIC));
         System.out.println("✓ Consumer created and subscribed");
     }
 
