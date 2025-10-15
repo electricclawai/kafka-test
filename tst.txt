@@ -1,0 +1,204 @@
+name: "kafka-ct2"
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - sc971-gradle-changes
+
+jobs:
+  kafka-functional-test:
+    runs-on: [self-hosted, linux, enterprise, docker]
+    container:
+      image: ghcr.io/northerntrust-internal/ghe-node14-jdk8-11-17-gradle8.7:latest
+    
+    env:
+      GIT-REPO-NAME: "apm0005237-ghe-srepocautomation"
+      GIT-REPO-URL: "https://github.com/northerntrust-internal/apm0005237-ghe-srepocautomation"
+      artifact_name: "rpn-srepocautomation"
+      version-major: "1"
+      version-minor: "0"
+      version-patch: "0"
+      onboarded_to_sonar: "false"
+      onboarded_to_enterprise_sonar: "true"
+      sonar-key: "com.ntrs.rpn:rpn-srepocautomation"
+      proxy: "http://global-zia-proxy.ntrs.com:9443"
+    
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v3
+      
+      - name: Install Docker Compose
+        run: |
+          apt-get update && apt-get install -y docker-compose
+      
+      - name: Create Shared Docker Network
+        run: |
+          # Get the network that the runner container is on
+          RUNNER_NETWORK=$(docker inspect $(hostname) -f '{{range $net,$v := .NetworkSettings.Networks}}{{$net}}{{end}}' | head -n1)
+          echo "Runner container is on network: $RUNNER_NETWORK"
+          
+          # If we can't detect it, create a new network and connect the runner
+          if [ -z "$RUNNER_NETWORK" ] || [ "$RUNNER_NETWORK" = "host" ]; then
+            echo "Creating new bridge network: kafka-test-network"
+            docker network create kafka-test-network || true
+            RUNNER_NETWORK="kafka-test-network"
+            # Connect current container to the network
+            docker network connect $RUNNER_NETWORK $(hostname) || true
+          fi
+          
+          echo "RUNNER_NETWORK=$RUNNER_NETWORK" >> $GITHUB_ENV
+      
+      - name: Start Kafka (Wurstmeister)
+        run: |
+          cat <<EOF > docker-compose.yml
+          version: '3.8'
+          services:
+            zookeeper:
+              image: wurstmeister/zookeeper:latest
+              container_name: zookeeper
+              networks:
+                - ${RUNNER_NETWORK}
+              environment:
+                ZOOKEEPER_CLIENT_PORT: 2181
+            
+            kafka:
+              image: wurstmeister/kafka:latest
+              container_name: kafka
+              networks:
+                - ${RUNNER_NETWORK}
+              environment:
+                KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+                KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+                KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+                KAFKA_BROKER_ID: 1
+                KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+          
+          networks:
+            ${RUNNER_NETWORK}:
+              external: true
+          EOF
+          docker compose up -d
+          echo "Waiting for containers to initialize..."
+          sleep 15
+      
+      - name: Wait for Kafka to be Ready
+        run: |
+          timeout=300  # 5 minutes
+          start_time=$(date +%s)
+          while true; do
+            if docker exec kafka kafka-topics.sh --bootstrap-server kafka:9092 --list > /dev/null 2>&1; then
+              echo "Kafka is ready!";
+              break;
+            fi
+            current_time=$(date +%s)
+            elapsed=$((current_time - start_time))
+            if [ $elapsed -ge $timeout ]; then
+              echo "Timeout reached. Kafka is not ready.";
+              docker logs kafka
+              exit 1;
+            fi
+            echo "Waiting for Kafka to be ready...";
+            sleep 10;
+          done
+      
+      # - name: Install netcat
+      #   run: |
+      #     apt-get update && apt-get install -y netcat
+      
+      - name: Validate Kafka Port and Logs
+        run: |
+          echo "Checking if Kafka port 9092 is open on 'kafka' hostname..."
+          if nc -zv kafka 9092; then
+            echo "Kafka port 9092 is open."
+          else
+            echo "Kafka port 9092 is NOT open!"; docker logs kafka; exit 1;
+          fi
+          echo "Checking Kafka logs for errors..."
+          docker logs kafka | grep -i error || echo "No errors found in Kafka logs."
+          echo "Listing running containers for debug:"
+          docker ps -a
+      
+      - name: Capture Kafka Logs (if failure)
+        if: failure()
+        run: |
+          echo "Fetching Kafka logs..."
+          docker logs kafka || echo "Kafka container not found."
+      
+      - name: Ensure Gradle Wrapper is Executable
+        run: chmod +x ./gradlew
+      
+      - name: Network Diagnostics
+        run: |
+          echo "=== Docker Network Information ==="
+          docker network ls
+          echo ""
+          echo "=== Inspecting Docker Networks ==="
+          docker network inspect bridge || true
+          docker network inspect host || true
+          echo ""
+          echo "=== Container Network Details ==="
+          docker inspect kafka | grep -A 20 "NetworkSettings" || true
+          docker inspect zookeeper | grep -A 20 "NetworkSettings" || true
+          echo ""
+          echo "=== Current Container IP Addresses ==="
+          echo "Kafka IP:"
+          docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' kafka || echo "N/A"
+          echo "Zookeeper IP:"
+          docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' zookeeper || echo "N/A"
+          echo ""
+          echo "=== Runner Container Network Info ==="
+          hostname -I || ip addr show || true
+          echo ""
+          echo "=== Network Interfaces ==="
+          ip addr show || ifconfig -a || true
+          echo ""
+          echo "=== Routing Table ==="
+          ip route || route -n || true
+          echo ""
+          echo "=== DNS Resolution Test ==="
+          getent hosts kafka || echo "Cannot resolve 'kafka' hostname"
+          getent hosts zookeeper || echo "Cannot resolve 'zookeeper' hostname"
+          echo ""
+          echo "=== Port Listening Status ==="
+          netstat -tuln | grep 9092 || ss -tuln | grep 9092 || echo "Port 9092 not found in netstat/ss"
+          echo ""
+          echo "=== Testing Connectivity from Runner Container ==="
+          echo "Testing kafka:9092 (via hostname)..."
+          timeout 5 bash -c 'cat < /dev/null > /dev/tcp/kafka/9092' && echo "kafka:9092 is reachable" || echo "kafka:9092 is NOT reachable"
+          echo ""
+          echo "Testing zookeeper:2181 (via hostname)..."
+          timeout 5 bash -c 'cat < /dev/null > /dev/tcp/zookeeper/2181' && echo "zookeeper:2181 is reachable" || echo "zookeeper:2181 is NOT reachable"
+          echo ""
+          echo "Getting Kafka container IP..."
+          KAFKA_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' kafka)
+          echo "Kafka IP: $KAFKA_IP"
+          if [ ! -z "$KAFKA_IP" ]; then
+            echo "Testing $KAFKA_IP:9092..."
+            timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/9092" && echo "$KAFKA_IP:9092 is reachable" || echo "$KAFKA_IP:9092 is NOT reachable"
+          fi
+          echo ""
+          echo "=== Docker Process List ==="
+          docker ps -a
+          echo ""
+          echo "=== Current Container Info (if in container) ==="
+          cat /proc/1/cgroup || echo "Not in container or cannot read cgroup"
+          echo ""
+          echo "=== Network Namespace ==="
+          ls -la /var/run/netns/ || echo "Cannot list network namespaces"
+      
+      - name: Build and Run Kafka Tests
+        run: ./gradlew test --info --stacktrace
+        env:
+          KAFKA_BROKER: kafka:9092
+      
+      - name: Upload Functional Test Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functional-test-report
+          path: build/reports/tests/functionalTest/
+      
+      - name: Cleanup Kafka and Zookeeper Containers
+        if: always()
+        run: docker compose down
