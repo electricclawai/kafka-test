@@ -1,0 +1,50 @@
+      - name: Network Diagnostics
+        run: |
+          echo "=== Docker Network Information ==="
+          docker network ls
+          echo ""
+          echo "=== Inspecting Docker Networks ==="
+          docker network inspect bridge || true
+          docker network inspect host || true
+          echo ""
+          echo "=== Container Network Details ==="
+          docker inspect kafka | grep -A 20 "NetworkSettings" || true
+          docker inspect zookeeper | grep -A 20 "NetworkSettings" || true
+          echo ""
+          echo "=== Current Container IP Addresses ==="
+          echo "Kafka IP:"
+          docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' kafka || echo "N/A"
+          echo "Zookeeper IP:"
+          docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' zookeeper || echo "N/A"
+          echo ""
+          echo "=== Runner Container Network Info ==="
+          hostname -I || ip addr show || true
+          echo ""
+          echo "=== Network Interfaces ==="
+          ip addr show || ifconfig -a || true
+          echo ""
+          echo "=== Routing Table ==="
+          ip route || route -n || true
+          echo ""
+          echo "=== DNS Resolution Test ==="
+          getent hosts kafka || echo "Cannot resolve 'kafka' hostname"
+          getent hosts zookeeper || echo "Cannot resolve 'zookeeper' hostname"
+          echo ""
+          echo "=== Port Listening Status ==="
+          netstat -tuln | grep 9092 || ss -tuln | grep 9092 || echo "Port 9092 not found in netstat/ss"
+          echo ""
+          echo "=== Testing Connectivity from Runner Container ==="
+          echo "Testing localhost:9092..."
+          timeout 5 bash -c 'cat < /dev/null > /dev/tcp/localhost/9092' && echo "localhost:9092 is reachable" || echo "localhost:9092 is NOT reachable"
+          echo ""
+          echo "Testing 127.0.0.1:9092..."
+          timeout 5 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/9092' && echo "127.0.0.1:9092 is reachable" || echo "127.0.0.1:9092 is NOT reachable"
+          echo ""
+          echo "=== Docker Process List ==="
+          docker ps -a
+          echo ""
+          echo "=== Current Container Info (if in container) ==="
+          cat /proc/1/cgroup || echo "Not in container or cannot read cgroup"
+          echo ""
+          echo "=== Network Namespace ==="
+          ls -la /var/run/netns/ || echo "Cannot list network namespaces"
